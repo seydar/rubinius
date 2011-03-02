@@ -193,31 +193,56 @@ class Hash
   def []=(key, value)
     Ruby.check_frozen
 
+    # Dynamically resize the underlying array if we're gonna blow.
     redistribute @entries if @size > @max_entries
 
+    # Compute the hash once, and restrict it to the first +@mask+ bits.
     key_hash = key.hash
-    index = key_hash & @mask # key_index key_hash
 
+    # Since +@max_entries+ (which is the size of the underlying array)
+    # is restricted to a power of 2, the "bitwise &" acts
+    # as a superfast modulo.
+    # This +index+ is now our ticket into the array.
+    index = key_hash & @mask
+
+    # This is the +Entry+ that is stored at each location that contains
+    # something in the array.
     entry = @entries[index]
+
+    # Good news! No collisions! This means we can just enter it in.
     unless entry
       @entries[index] = new_entry key, key_hash, value
       return value
     end
 
+    # If we're entering something that is IDENTICALLY already there,
+    # just return it and do nothing. This only works for slots that
+    # don't have any collisions.
     if entry.match? key, key_hash
       return entry.value = value
     end
 
-    last = entry
+    # Bad news bears... Since we're this far, we've had a collision.
+    # We deal with collisions by chaining them, adding the most recent
+    # collision to the back of the list.
+    # Now, you may be patting yourself on the back and smirking
+    # because you just realized that we can add the item to the FRONT
+    # of the list and have constant-time collision resolution!
+    # Well put your dunce cap back on because you forgot about the
+    # fact that we don't want duplicate entries, so we have to traverse
+    # the entire chain anyways, so we might as well add it to the end.
+    last  = entry
     entry = entry.next
-    while entry
-      if entry.match? key, key_hash
-        return entry.value = value
-      end
+    while entry                     # For each entry,
+      if entry.match? key, key_hash # see if it matches out target.
+        return entry.value = value  # If so, return it so we don't
+      end                           # add a new entry.
 
-      last = entry
+      last  = entry
       entry = entry.next
     end
+
+    # If all else fails, add a new entry.
     last.next = new_entry key, key_hash, value
 
     value
@@ -307,20 +332,7 @@ class Hash
   def each
     return to_enum :each unless block_given?
 
-    idx = 0
-    cap = @capacity
-    entries = @entries
-
-    while idx < cap
-      entry = entries[idx]
-      while entry
-        yield [entry.key, entry.value]
-        entry = entry.next
-      end
-
-      idx += 1
-    end
-
+    each_entry { |e| yield [e.key, e.value] }
     self
   end
 
